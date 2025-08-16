@@ -58,17 +58,14 @@ class Args:
     # Layer to intervene, 0 to do text embedding interpolation (TEI), "all" for interpolating hidden states (TLI),
     # Other integers for specific layer interpolation. None for turning it off.
     switch_prompt = False
-    layer_to_intervene = "all"
+    layer_to_intervene = None #"all" # TODO: test baseline performance
     use_TEI_and_TLI = False
     mask_prompt_method = None  # options: None, "blank", "mask", "blank_with_text_latent"
     obscure_prompt = False
     obscure_prompt_layer = None
     use_only_two_prompt_for_libero_object = False
+    
     seed: int = 7  # Random Seed (for reproducibility)
-
-    ##### Zhenyang expeirment #####
-    altwording = False
-    ##### Zhenyang expeirment #####
 
 
 switch_prompt_file = os.path.join(os.path.dirname(__file__), "mapping.json")
@@ -354,196 +351,195 @@ def eval_libero(args: Args) -> None:
 
         # Get default LIBERO initial states
         # initial_states = task_suite.get_task_init_states(task_id)
+        # TODO: change the task description here
+        # for new_task_description in LIBERO_TASK_DESCRIPTIONS[args.task_suite_name].values():
+        for new_task_description in LIBERO_TASK_DESCRIPTIONS['random'].values():
+            task_description = new_task_description # input prompt
 
-        # Initialize LIBERO environment and task description
-        env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
-        task_scene = task_description
-
-        if args.altwording:
-            task_segment = task_description.replace(" ", "_")
-            task_description = LIBERO_TASK_DESCRIPTIONS[f"{args.task_suite_name}_altwording"][task_segment]
-        
-        if args.save_video:
-            task_segment = task_description.replace(" ", "_")
-            (pathlib.Path(args.video_out_path) / f"{task_segment}").mkdir(parents=True, exist_ok=False)
-
-        # Start episodes
-        task_episodes, task_successes = 0, 0
-        for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
-            logging.info(f"\nTask Scene: {task_scene}")
-            logging.info(f"\nTask Prompt: {task_description}")
-
-            # Reset environment
-            obs = env.reset()
-            env.env.sim._render_context_offscreen.render = types.MethodType(render,
-                                                                            env.env.sim._render_context_offscreen)
-            marker_params.clear()
-            reset_sever = True
-
-            action_plan = collections.deque()
-
-            # Set initial states
-            # obs = env.set_init_state(initial_states[episode_idx])
-
-            # Setup
-            t = 0
-            replay_images = []
-            replay_wrist_images = []
-
-            logging.info(f"Starting episode {task_episodes + 1}...")
-            while t < max_steps + args.num_steps_wait:
-                try:
-                    # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
-                    # and we need to wait for them to fall
-                    if t < args.num_steps_wait:
-                        obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
-                        # cv2.imwrite("test.png", cv2.cvtColor(obs["agentview_image"][::-1, ::-1], cv2.COLOR_BGR2RGB))
-                        t += 1
-                        continue
-
-                    # Get preprocessed image
-                    # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    original_img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                    original_wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-                    img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(original_img, args.resize_size, args.resize_size)
-                    )
-                    wrist_img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(original_wrist_img, args.resize_size, args.resize_size)
-                    )
-                    if args.render:
-                        cv2.imshow("agentview", cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
-                        cv2.imshow("robot0_eye_in_hand", cv2.cvtColor(original_wrist_img, cv2.COLOR_BGR2RGB))
-                        cv2.waitKey(1)
-                    # Save preprocessed image for replay video
-                    replay_images.append(original_img)
-                    replay_wrist_images.append(original_wrist_img)
-
-                    if not action_plan:
-                        # Finished executing previous action chunk -- compute new chunk
-                        # Prepare observations dict
-                        element = {
-                            "done": reset_sever,
-                            "layer_to_intervene": args.layer_to_intervene,
-                            "observation/image": img,
-                            "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
-                                )
-                            ),
-                            "prompt": str(task_description),
-                            "mask_prompt_method": args.mask_prompt_method,
-                            "use_TEI_and_TLI": args.use_TEI_and_TLI,
-                            "task_hidden_states_mapping": task_hidden_states_mapping,
-                            "hidden_states_mapping_file": hidden_states_mapping_file,
-                        }
-                        if args.use_only_two_prompt_for_libero_object:
-                            if task_id in task_using_center_prompt:
-                                element["prompt"] = libero_object_center_prompt
-                            else:
-                                element["prompt"] = libero_object_top_right_prompt
-                            if reset_sever:
-                                print(f"replace object prompt with {element['prompt']}")
-
-                        if args.switch_prompt:
-                            # align with the switch strategy of TLI
-                            switch_step = task_hidden_states_mapping[task_description.replace(" ", "_")][-1] / 2 * 5
-                            if t < switch_step:
-                                element["prompt"] = prompts_to_switch[task_description][0]
-                            else:
-                                element["prompt"] = prompts_to_switch[task_description][1]
-                            if t == switch_step:
-                                print("Use prompt: \n{}\n{}".format(prompts_to_switch[task_description][0],
-                                                                    prompts_to_switch[task_description][1]))
-
-                        if args.obscure_prompt:
-                            if args.obscure_prompt_layer is None:
-                                if args.task_suite_name == "libero_object":
-                                    layer = 2
-                                elif args.task_suite_name == "libero_goal":
-                                    layer = 1
-                                elif args.task_suite_name == "libero_spatial":
-                                    layer = 3
-                                else:
-                                    raise ValueError(f"Unknown task suite: {args.task_suite_name}")
-                            else:
-                                layer = args.obscure_prompt_layer
-                            element["prompt_to_use"] = reconstruct_prompt[str(task_segment)]["token_indices"][layer]
-                            element["prompt_to_use"][0] = 2  # match the distribution
-                            element["prompt_to_use"][-1] = 108  # match the distribution
-                            element["prompt_to_use_str"] = reconstruct_prompt[str(task_segment)]["decoding_result"][
-                                layer]
-
-                        # Query model to get action
-                        received = client.infer(element)
-                        action_chunk = received["actions"]
-                        reset_sever = False
-                        assert (
-                                len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
-                        action_plan.extend(action_chunk[: args.replan_steps])
-
-                        total_steps += 1
-
-                    action = action_plan.popleft()
-
-                    if args.draw_traj and t % 2 == 0:
-                        color = color_list[t] if t < len(color_list) else color_list[-1]
-                        to_draw_data = dict(pos=obs["robot0_eef_pos"], rgba=np.array(color))
-                        marker_params.append(to_draw_data)
-
-                    # Execute action in environment
-                    obs, reward, done, info = env.step(action.tolist())
-                    if done:
-                        task_successes += 1
-                        total_successes += 1
-                        break
-                    t += 1
-
-                except Exception as e:
-                    logging.error(f"Caught exception: {e}")
-                    break
-
-            task_episodes += 1
-            total_episodes += 1
-
-            # Save a replay video of the episode
-            suffix = "success" if done else "failure"
-            task_segment = task_description.replace(" ", "_")
+            # Initialize LIBERO environment and task description
+            env, task_scene_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed) # real task description
 
             if args.save_video:
-                imageio.mimwrite(
-                    pathlib.Path(args.video_out_path) / f"{task_segment}/{suffix}_{episode_idx}.mp4",
-                    [np.asarray(x) for x in replay_images],
-                    fps=30,  # the same as openvla
-                )
-                imageio.mimwrite(
-                    pathlib.Path(args.video_out_path) / f"{task_segment}/{suffix}_wrist_{episode_idx}.mp4",
-                    [np.asarray(x) for x in replay_wrist_images],
-                    fps=30)  # the same as openvla
+                task_segment = task_scene_description.replace(" ", "_")
+                input_prompt = task_description.replace(" ", "_")
+                (pathlib.Path(args.video_out_path) / f"{task_segment}/{input_prompt}").mkdir(parents=True, exist_ok=False)
 
-            if args.draw_traj:
-                dir = pathlib.Path(args.video_out_path) / f"{task_segment}/{suffix}_{episode_idx}"
-                dir.mkdir(parents=True, exist_ok=True)
-                for idx, img in enumerate(replay_images):
-                    cv2.imwrite(str(dir / f"{idx}.png"), cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            # Start episodes
+            task_episodes, task_successes = 0, 0
+            for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
+                logging.info(f"\nTask Scene: {task_scene_description}")
+                logging.info(f"\nTask Prompt: {task_description}")
 
-            # Log current results
-            logging.info(f"Success: {done}")
-            logging.info(f"Intervention: {args.layer_to_intervene}")
-            logging.info(f"# episodes completed so far: {total_episodes}")
-            logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
-            logging.info(f"mean steps so far: {total_steps / total_episodes:.1f}")
+                # Reset environment
+                obs = env.reset()
+                env.env.sim._render_context_offscreen.render = types.MethodType(render,
+                                                                                env.env.sim._render_context_offscreen)
+                marker_params.clear()
+                reset_sever = True
 
-        # Log final results
-        task_segment = task_description.replace(" ", "_")
-        results[task_segment] = task_successes / task_episodes
-        logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
-        logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+                action_plan = collections.deque()
 
+                # Set initial states
+                # obs = env.set_init_state(initial_states[episode_idx])
+                # Setup
+                t = 0
+                replay_images = []
+                replay_wrist_images = []
+
+                logging.info(f"Starting episode {task_episodes + 1}...")
+                while t < max_steps + args.num_steps_wait:
+                    try:
+                        # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
+                        # and we need to wait for them to fall
+                        if t < args.num_steps_wait:
+                            obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            # cv2.imwrite("test.png", cv2.cvtColor(obs["agentview_image"][::-1, ::-1], cv2.COLOR_BGR2RGB))
+                            t += 1
+                            continue
+
+                        # Get preprocessed image
+                        # IMPORTANT: rotate 180 degrees to match train preprocessing
+                        original_img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+                        original_wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                        img = image_tools.convert_to_uint8(
+                            image_tools.resize_with_pad(original_img, args.resize_size, args.resize_size)
+                        )
+                        wrist_img = image_tools.convert_to_uint8(
+                            image_tools.resize_with_pad(original_wrist_img, args.resize_size, args.resize_size)
+                        )
+                        if args.render:
+                            cv2.imshow("agentview", cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
+                            cv2.imshow("robot0_eye_in_hand", cv2.cvtColor(original_wrist_img, cv2.COLOR_BGR2RGB))
+                            cv2.waitKey(1)
+                        # Save preprocessed image for replay video
+                        replay_images.append(original_img)
+                        replay_wrist_images.append(original_wrist_img)
+
+                        if not action_plan:
+                            # Finished executing previous action chunk -- compute new chunk
+                            # Prepare observations dict
+                            element = {
+                                "done": reset_sever,
+                                "layer_to_intervene": args.layer_to_intervene,
+                                "observation/image": img,
+                                "observation/wrist_image": wrist_img,
+                                "observation/state": np.concatenate(
+                                    (
+                                        obs["robot0_eef_pos"],
+                                        _quat2axisangle(obs["robot0_eef_quat"]),
+                                        obs["robot0_gripper_qpos"],
+                                    )
+                                ),
+                                "prompt": str(task_description),
+                                "mask_prompt_method": args.mask_prompt_method,
+                                "use_TEI_and_TLI": args.use_TEI_and_TLI,
+                                "task_hidden_states_mapping": task_hidden_states_mapping,
+                                "hidden_states_mapping_file": hidden_states_mapping_file,
+                            }
+                            if args.use_only_two_prompt_for_libero_object:
+                                if task_id in task_using_center_prompt:
+                                    element["prompt"] = libero_object_center_prompt
+                                else:
+                                    element["prompt"] = libero_object_top_right_prompt
+                                if reset_sever:
+                                    print(f"replace object prompt with {element['prompt']}")
+
+                            if args.switch_prompt:
+                                # align with the switch strategy of TLI
+                                switch_step = task_hidden_states_mapping[task_description.replace(" ", "_")][-1] / 2 * 5
+                                if t < switch_step:
+                                    element["prompt"] = prompts_to_switch[task_description][0]
+                                else:
+                                    element["prompt"] = prompts_to_switch[task_description][1]
+                                if t == switch_step:
+                                    print("Use prompt: \n{}\n{}".format(prompts_to_switch[task_description][0],
+                                                                        prompts_to_switch[task_description][1]))
+
+                            if args.obscure_prompt:
+                                if args.obscure_prompt_layer is None:
+                                    if args.task_suite_name == "libero_object":
+                                        layer = 2
+                                    elif args.task_suite_name == "libero_goal":
+                                        layer = 1
+                                    elif args.task_suite_name == "libero_spatial":
+                                        layer = 3
+                                    else:
+                                        raise ValueError(f"Unknown task suite: {args.task_suite_name}")
+                                else:
+                                    layer = args.obscure_prompt_layer
+                                element["prompt_to_use"] = reconstruct_prompt[str(task_segment)]["token_indices"][layer]
+                                element["prompt_to_use"][0] = 2  # match the distribution
+                                element["prompt_to_use"][-1] = 108  # match the distribution
+                                element["prompt_to_use_str"] = reconstruct_prompt[str(task_segment)]["decoding_result"][
+                                    layer]
+
+                            # Query model to get action
+                            received = client.infer(element)
+                            action_chunk = received["actions"]
+                            reset_sever = False
+                            assert (
+                                    len(action_chunk) >= args.replan_steps
+                            ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                            action_plan.extend(action_chunk[: args.replan_steps])
+
+                            total_steps += 1
+
+                        action = action_plan.popleft()
+
+                        if args.draw_traj and t % 2 == 0:
+                            color = color_list[t] if t < len(color_list) else color_list[-1]
+                            to_draw_data = dict(pos=obs["robot0_eef_pos"], rgba=np.array(color))
+                            marker_params.append(to_draw_data)
+
+                        # Execute action in environment
+                        obs, reward, done, info = env.step(action.tolist())
+                        if done:
+                            task_successes += 1
+                            total_successes += 1
+                            break
+                        t += 1
+
+                    except Exception as e:
+                        logging.error(f"Caught exception: {e}")
+                        break
+
+                task_episodes += 1
+                total_episodes += 1
+
+                # Save a replay video of the episode
+                suffix = "success" if done else "failure"
+                input_prompt = task_description.replace(" ", "_")
+
+                if args.save_video:
+                    imageio.mimwrite(
+                        pathlib.Path(args.video_out_path) / f"{task_segment}/{input_prompt}/{suffix}_{episode_idx}.mp4",
+                        [np.asarray(x) for x in replay_images],
+                        fps=30,  # the same as openvla
+                    )
+                    imageio.mimwrite(
+                        pathlib.Path(args.video_out_path) / f"{task_segment}/{input_prompt}/{suffix}_wrist_{episode_idx}.mp4",
+                        [np.asarray(x) for x in replay_wrist_images],
+                        fps=30)  # the same as openvla
+
+                if args.draw_traj:
+                    dir = pathlib.Path(args.video_out_path) / f"{task_segment}/{input_prompt}/{suffix}_{episode_idx}"
+                    dir.mkdir(parents=True, exist_ok=True)
+                    for idx, img in enumerate(replay_images):
+                        cv2.imwrite(str(dir / f"{idx}.png"), cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+                # Log current results
+                logging.info(f"Success: {done}")
+                logging.info(f"Intervention: {args.layer_to_intervene}")
+                logging.info(f"# episodes completed so far: {total_episodes}")
+                logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
+                logging.info(f"mean steps so far: {total_steps / total_episodes:.1f}")
+
+            # Log final result
+            results[input_prompt] = task_successes / task_episodes
+            logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
+            logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+
+    # TODO: fixing logging system later. Only check the behavior now.
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
     results["total_success_rate"] = float(total_successes) / float(total_episodes)
@@ -560,9 +556,7 @@ def eval_libero(args: Args) -> None:
 def _get_libero_env(task, resolution, seed):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
-    # TODO: hack for 15cm test
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    # task_bddl_file = f"/research/data/zhenyang/pi0-text-latent/third_party/modified_libero/libero/libero/bddl_files_15cm/{task.problem_folder}/{task.bddl_file}"
     env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
 
     env = OffScreenRenderEnv(**env_args)
@@ -624,19 +618,13 @@ def run_reconstruction_exp():
 
 def run_extrapolation_exp():
     logging.basicConfig(level=logging.INFO)
-
-    # task_suite_list = ["libero_object", "libero_goal", "libero_spatial"]
-    task_suite_list = ["libero_object"]
-    for task_suite in task_suite_list:
+    # TODO: run all the evals
+    for task_suite in ["libero_object", "libero_goal", "libero_spatial"]:
         # TLI
-        print(f"*******Running baseline for {task_suite}**********")
-        # TODO: change the experiment here
+        print(f"*******Running baseline prompt for {task_suite}**********")
         args = Args()
         args.task_suite_name = task_suite
-        args.layer_to_intervene = None # "all"
-        args.video_out_path = "data/libero/videos/08-14-larger-reset-region"
-        args.num_trials_per_task = 10
-        args.altwording = False
+        args.layer_to_intervene = None
         eval_libero(args)
 
         # # TEI

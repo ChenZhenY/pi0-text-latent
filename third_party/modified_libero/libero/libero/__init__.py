@@ -5,7 +5,8 @@ import yaml
 libero_config_path = os.environ.get(
     "LIBERO_CONFIG_PATH", os.path.expanduser("~/.libero")
 )
-config_file = os.path.join(libero_config_path, "config.yaml")
+# TODO: change the config yaml to handle different path for different datasets
+config_file = os.path.join(libero_config_path, "config_eic_research_data.yaml")
 
 
 def get_default_path_dict(custom_location=None):
@@ -38,6 +39,9 @@ def get_default_path_dict(custom_location=None):
 def get_libero_path(query_key):
     with open(config_file, "r") as f:
         config = dict(yaml.load(f.read(), Loader=yaml.FullLoader))
+
+    print(f"config_file: {config_file}")
+    print(f"config: {config}")
 
     # Give warnings in case the user needs to access the paths
     for key in config:
