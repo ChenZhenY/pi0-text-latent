@@ -481,7 +481,7 @@ class Module(nn.Module):
     ) -> tuple[
         Sequence[at.Float[at.Array, "b _t _d"] | None], KVCache, tuple[at.Float[at.Array, "l b _t _d"] | None, at.Array,
         at.Array, at.Array | None, list[at.Array | None], tuple[
-            at.Array | None, at.Array | None], at.Array, at.Array, at.Array | None]]:
+            at.Array | None, at.Array | None], at.Array, at.Array, at.Array | None, at.Array | None, at.Array | None]]:
 
         # check
         assert attention is None or attention.shape[0] == len(self.layers)
@@ -508,6 +508,8 @@ class Module(nn.Module):
         all_post_attn_1 = []
         all_post_attn_2 = []
         layer_hidden_states = []
+        expert_0_hidden_states = []  # PaliGemma expert (positions 0-815)
+        expert_1_hidden_states = []  # Action expert (positions 816+)
         post_attn_embeddings = []
         text_representation = []
 
@@ -565,6 +567,17 @@ class Module(nn.Module):
 
             post_attn_embeddings.append(post_attn_embed[1] if post_attn_embed[0] is None else post_attn_embed[0])
 
+            # Extract expert-specific hidden states
+            if embedded[0] is not None:  # Expert 0 (PaliGemma) - positions 0-815
+                expert_0_hidden_states.append(embedded[0])
+            else:
+                expert_0_hidden_states.append(None)
+                
+            if embedded[1] is not None:  # Expert 1 (Action Expert) - positions 816+
+                expert_1_hidden_states.append(embedded[1])
+            else:
+                expert_1_hidden_states.append(None)
+
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
         kv_cache_0 = jnp.stack(kv_cache_0, axis=0)
@@ -608,10 +621,21 @@ class Module(nn.Module):
         layer_hidden_states = jnp.stack(layer_hidden_states, axis=0)
         post_attn_embeddings = jnp.stack(post_attn_embeddings, axis=0)
 
+        # Stack expert-specific hidden states
+        if None not in expert_0_hidden_states:
+            expert_0_hidden_states = jnp.stack(expert_0_hidden_states, axis=0)
+        else:
+            expert_0_hidden_states = None
+            
+        if None not in expert_1_hidden_states:
+            expert_1_hidden_states = jnp.stack(expert_1_hidden_states, axis=0)
+        else:
+            expert_1_hidden_states = None
+
         # collect attn information
         attn_output = (mlp_activations, attention, output_pre_attn_scales, output_pre_mlp_scales,
                        output_norm, (all_post_attn_1, all_post_attn_2), layer_hidden_states, post_attn_embeddings,
-                       text_representation)
+                       text_representation, expert_0_hidden_states, expert_1_hidden_states)
         return output, (kv_cache_0, kv_cache_1), attn_output
 
     def init(self):
@@ -652,58 +676,126 @@ def _name(name, i):
         return name
     return f"{name}_{i}"
 
+import numpy as np
 
 class Analysis:
     @staticmethod
-    def get_mlp_activation(attn_output, layer_index=None):
+    def get_mlp_activation(attn_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(attn_output[0]))]
-        return attn_output[0][jnp.asarray(layer_index)] if attn_output[0] is not None else None
+        result = attn_output[0][jnp.asarray(layer_index)] if attn_output[0] is not None else None
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_attention(attn_output, layer_index=None):
+    def get_attention(attn_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(attn_output[1]))]
-        return attn_output[1][jnp.asarray(layer_index)]
+        result = attn_output[1][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_pre_attn_norm_scales(attn_output, layer_index=None):
+    def get_pre_attn_norm_scales(attn_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(attn_output[2]))]
-        return attn_output[2][jnp.asarray(layer_index)]
+        result = attn_output[2][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_pre_mlp_norm_scales(attn_output, layer_index=None):
+    def get_pre_mlp_norm_scales(attn_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(attn_output[3]))]
-        return attn_output[3][jnp.asarray(layer_index)] if attn_output[3] is not None else None
+        result = attn_output[3][jnp.asarray(layer_index)] if attn_output[3] is not None else None
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_final_norm_scales(attn_output):
-        return attn_output[4]
+    def get_final_norm_scales(attn_output, to_numpy=False):
+        result = attn_output[4]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_post_attn_value(attn_output, layer_index=None):
+    def get_post_attn_value(attn_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(attn_output[5][0]))]
-        return [x[jnp.asarray(layer_index)] if x is not None else None for x in attn_output[5]]
+        result = [x[jnp.asarray(layer_index)] if x is not None else None for x in attn_output[5]]
+        if to_numpy:
+            result = [np.array(x.astype(jnp.float32)) if x is not None else None for x in result]
+        return result
 
     @staticmethod
-    def get_neuron_memory(nnx_model, module_index, layer_index, neuron_index=None):
+    def get_neuron_memory(nnx_model, module_index, layer_index, neuron_index=None, to_numpy=False):
         layer = getattr(nnx_model, f"layers_{layer_index}")
         module_name = "mlp" if module_index == 0 else "mlp_1"
         memory = layer[module_name]["linear"]
-        if neuron_index is not None:
-            return memory[neuron_index]
-        else:
-            return memory
+        result = memory[neuron_index] if neuron_index is not None else memory
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_hidden_states(layer_output, layer_index=None):
+    def get_hidden_states(layer_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(layer_output[6]))]
-        return layer_output[6][jnp.asarray(layer_index)]
+        result = layer_output[6][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_post_attn_embedding(layer_output, layer_index=None):
+    def get_post_attn_embedding(layer_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(layer_output[7]))]
-        return layer_output[7][jnp.asarray(layer_index)]
+        result = layer_output[7][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
 
     @staticmethod
-    def get_text_representation(layer_output, layer_index=None):
+    def get_text_representation(layer_output, layer_index=None, to_numpy=False):
         layer_index = layer_index or [i for i in range(len(layer_output[8]))]
-        return layer_output[8][jnp.asarray(layer_index)]
+        result = layer_output[8][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
+
+    @staticmethod
+    def get_expert_0_hidden_states(layer_output, layer_index=None, to_numpy=False):
+        """Extract PaliGemma expert hidden states (positions 0-815)."""
+        if layer_output[9] is None:
+            return None
+        layer_index = layer_index or [i for i in range(len(layer_output[9]))]
+        result = layer_output[9][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
+
+    @staticmethod
+    def get_expert_1_hidden_states(layer_output, layer_index=None, to_numpy=False):
+        """Extract Action expert hidden states (positions 816+)."""
+        if layer_output[10] is None:
+            return None
+        layer_index = layer_index or [i for i in range(len(layer_output[10]))]
+        result = layer_output[10][jnp.asarray(layer_index)]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result
+
+    @staticmethod
+    def get_text_only_hidden_states(layer_output, layer_index=None, to_numpy=False):
+        """Extract text-only hidden states from expert 0 (positions 768-815)."""
+        expert_0_states = Analysis.get_expert_0_hidden_states(layer_output, layer_index, to_numpy=False)
+        if expert_0_states is None:
+            return None
+        # Text tokens are at positions 768-815 (48 tokens)
+        # These positions are hardcoded because they're determined by model architecture:
+        # - SIGLIP patch size: (14, 14) with 224x224 images = 256 patches per image
+        # - 3 images × 256 patches = 768 image tokens
+        # - Text tokens start at position 768
+        text_start = 256 * 3  # 768
+        text_end = text_start + 48  # 816
+        result = expert_0_states[:, :, text_start:text_end, :]
+        if to_numpy and result is not None:
+            result = np.array(result.astype(jnp.float32))
+        return result

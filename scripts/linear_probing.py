@@ -15,7 +15,7 @@ import optax
 from transformers import T5EncoderModel, T5Tokenizer
 
 from openpi.models import model as model_lib
-from openpi.models import pi0
+from openpi.models import pi0_linear_probing
 from openpi.models.gemma import Analysis
 from openpi.models.tokenizer import PaligemmaTokenizer
 
@@ -46,7 +46,7 @@ def get_t5_embeddings(prompts: List[str], tokenizer, model) -> np.ndarray:
     embeddings = model(**inputs).last_hidden_state.mean(axis=1)
     return embeddings
 
-def collect_data(pi0_model: pi0.Pi0, pi0_config: pi0.Pi0Config, t5_tokenizer: T5Tokenizer, t5_model: T5EncoderModel, tasks: List[str], num_steps: int):
+def collect_data(pi0_model: pi0_linear_probing.Pi0, pi0_config: pi0_linear_probing.Pi0Config, t5_tokenizer: T5Tokenizer, t5_model: T5EncoderModel, tasks: List[str], num_steps: int):
     """Collects latent features and text embeddings."""
     paligemma_tokenizer = PaligemmaTokenizer(max_len=pi0_config.max_token_len)
 
@@ -135,7 +135,7 @@ def analyze_results(results: Dict[Tuple[int, int], float]):
 
 def main(_):
     # Load pi0 model
-    pi0_config = pi0.Pi0Config()
+    pi0_config = pi0_linear_probing.Pi0Config()
     if FLAGS.model_path is None:
         print("Please provide a path to the model checkpoint using --model_path")
         return

@@ -17,7 +17,6 @@ from openpi.shared import array_typing as at
 
 logger = logging.getLogger("openpi")
 
-from openpi.models.gemma import Analysis
 
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
@@ -328,11 +327,6 @@ class Pi0(_model.BaseModel):
         post_attn_embedding = Analysis.get_post_attn_embedding(layer_output)
         post_attn = Analysis.get_post_attn_value(layer_output)[0]
 
-        # Extract expert-specific hidden states
-        expert_0_hidden_states = Analysis.get_expert_0_hidden_states(layer_output)
-        expert_1_hidden_states = Analysis.get_expert_1_hidden_states(layer_output)
-        text_only_hidden_states = Analysis.get_text_only_hidden_states(layer_output)
-
         # mlp_activation = Analysis.get_mlp_activation(layer_output)
         # mean_sum = mlp_activation.sum(axis=1)
         # var_sum = (mlp_activation ** 2).sum(axis=1)
@@ -342,9 +336,6 @@ class Pi0(_model.BaseModel):
                       text_representation=text_representation,
                       attention_score_sum=attention_score,
                       hidden_states_sum=hidden_states.sum(axis=1),
-                      expert_0_hidden_states_sum=expert_0_hidden_states.sum(axis=1) if expert_0_hidden_states is not None else None,
-                      expert_1_hidden_states_sum=expert_1_hidden_states.sum(axis=1) if expert_1_hidden_states is not None else None,
-                      text_only_hidden_states_sum=text_only_hidden_states.sum(axis=1) if text_only_hidden_states is not None else None,
                       post_attn_embedding_sum=post_attn_embedding.sum(axis=1),
                       post_attn_sum=post_attn.sum(axis=1)
                       # mean_sum=mean_sum,
@@ -356,77 +347,6 @@ class Pi0(_model.BaseModel):
         # result["original_loss"] = original_loss.sum(axis=0)
         return result
 
-    def sample_actions_with_latent(self,
-                       rng: at.KeyArrayLike,
-                       observation: _model.Observation,
-                       *,
-                       num_steps: int | at.Int[at.Array, ""] = 10,
-                       mlp_activation=None,
-                       hidden_states_to_add=None
-                       ) -> tuple[_model.Actions, tuple[at.Float[at.Array, "l b _t _d"] | None, at.Array,
-    at.Array, at.Array | None, list[at.Array | None], tuple[at.Array | None, at.Array | None]]]:
-        # this function is used for inference-time latent collection for action expert
-        # we return the action expert hidden states for each denoising time step (to reduce overhead)
-        
-        observation = _model.preprocess_observation(None, observation, train=False)
-        # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
-        # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
-        dt = -1.0 / num_steps
-        batch_size = observation.state.shape[0]
-        noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
-
-        # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        kv_cache, layer_output = self._encode(mlp_activation, prefix_tokens, prefix_attn_mask, positions,
-                                              hidden_states_to_add=hidden_states_to_add)
-        
-        action_expert_output = {}
-
-        def step(carry):
-            x_t, time = carry
-            suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(
-                observation, x_t, jnp.broadcast_to(time, batch_size)
-            )
-            # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
-            # other
-            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
-            # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
-            # prefix tokens
-            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
-            # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
-            # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
-            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
-            assert full_attn_mask.shape == (
-                batch_size,
-                suffix_tokens.shape[1],
-                prefix_tokens.shape[1] + suffix_tokens.shape[1],
-            )
-            # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
-            positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-
-            (prefix_out, suffix_out), _, action_expert_layer_output = self.PaliGemma.llm(
-                [None, suffix_tokens], mask=full_attn_mask, positions=positions, kv_cache=kv_cache,
-            )
-
-            action_expert_output["action_expert_state_time{}".format(time)] = action_expert_layer_output
-            assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
-
-            return x_t + dt * v_t, time + dt
-
-        # def cond(carry):
-        #     x_t, time = carry
-        #     # robust to floating-point error
-        #     return
-        x_t, time = noise, 1.0
-        while time >= -dt / 2:
-            x_t, time = step((x_t, time))
-
-        # x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
-        return x_t, layer_output, action_expert_output
-
     @override
     def sample_actions(self,
                        rng: at.KeyArrayLike,
@@ -434,7 +354,7 @@ class Pi0(_model.BaseModel):
                        *,
                        num_steps: int | at.Int[at.Array, ""] = 10,
                        mlp_activation=None,
-                       hidden_states_to_add=None
+                       hidden_states_to_add=None,
                        ) -> tuple[_model.Actions, tuple[at.Float[at.Array, "l b _t _d"] | None, at.Array,
     at.Array, at.Array | None, list[at.Array | None], tuple[at.Array | None, at.Array | None]]]:
         observation = _model.preprocess_observation(None, observation, train=False)
@@ -489,4 +409,64 @@ class Pi0(_model.BaseModel):
         while time >= -dt / 2:
             x_t, time = step((x_t, time))
 
+        # x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+        return x_t, layer_output
+
+    def sample_actions_with_latents(self,
+                       rng: at.KeyArrayLike,
+                       observation: _model.Observation,
+                       *,
+                       num_steps: int | at.Int[at.Array, ""] = 10,
+                       mlp_activation=None,
+                       hidden_states_to_add=None,
+                       ) -> tuple[_model.Actions, list]:
+        observation = _model.preprocess_observation(None, observation, train=False)
+        # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
+        # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
+        dt = -1.0 / num_steps
+        batch_size = observation.state.shape[0]
+        noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+
+        # first fill KV cache with a forward pass of the prefix
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        kv_cache, prefix_layer_output = self._encode(mlp_activation, prefix_tokens, prefix_attn_mask, positions,
+                                              hidden_states_to_add=hidden_states_to_add)
+
+        def step(carry, i):
+            x_t, time = carry
+            suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(
+                observation, x_t, jnp.broadcast_to(time, batch_size)
+            )
+            # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
+            # other
+            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+            # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
+            # prefix tokens
+            prefix_attn_mask_step = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
+            # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
+            full_attn_mask = jnp.concatenate([prefix_attn_mask_step, suffix_attn_mask], axis=-1)
+            assert full_attn_mask.shape == (
+                batch_size,
+                suffix_tokens.shape[1],
+                prefix_tokens.shape[1] + suffix_tokens.shape[1],
+            )
+            # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
+            positions_step = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+
+            (prefix_out, suffix_out), _, layer_output = self.PaliGemma.llm(
+                [None, suffix_tokens], mask=full_attn_mask, positions=positions_step, kv_cache=kv_cache,
+            )
+            assert prefix_out is None
+            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
+
+            return (x_t + dt * v_t, time + dt), layer_output
+
+        x_t, time = noise, 1.0
+        
+        all_latents = []
+        (x_t, time), layer_output = jax.lax.scan(step, (x_t, time), jnp.arange(num_steps))
+        
         return x_t, layer_output

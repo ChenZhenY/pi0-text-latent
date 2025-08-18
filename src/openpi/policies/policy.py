@@ -89,6 +89,7 @@ class Policy(BasePolicy):
     ):
         # self._sample_actions = model.sample_actions # stop jit for debugging
         self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+        self._sample_actions_with_latent = nnx_utils.module_jit(model.sample_actions_with_latent)        
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
@@ -208,9 +209,16 @@ class Policy(BasePolicy):
             self._sample_kwargs["hidden_states_to_add"] = hidden_states_to_add
 
         self._rng, sample_rng = jax.random.split(self._rng)
-        action, layer_output = self._sample_actions(sample_rng,
-                                                    _model.Observation.from_dict(inputs),
-                                                    **self._sample_kwargs)
+
+        if obs.get("collect_latents", True):
+            action, layer_output, action_expert_output = self._sample_actions_with_latent(sample_rng,
+                                                        _model.Observation.from_dict(inputs),
+                                                        **self._sample_kwargs)
+        else:
+            action, layer_output = self._sample_actions(sample_rng,
+                                                        _model.Observation.from_dict(inputs),
+                                                        **self._sample_kwargs)
+        
         self._sample_kwargs = {}  # clean every step
         outputs = {
             "state": inputs["state"],
@@ -221,6 +229,38 @@ class Policy(BasePolicy):
         # Unbatch and convert to np.ndarray.
         outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
         outputs = self._output_transform(outputs)
+
+        # Collect latent states if requested
+        # NOTE: we are sending back the model hidden states and this will take lots of bandwidth
+        # we need to convert the hidden state to np array from jax array
+        if obs.get("collect_latents", True):
+            from openpi.models.gemma import Analysis
+            #### For action expert hidden states ####
+            for key, value in action_expert_output.items():
+                outputs[key] = {
+                    # "mlp_activation": Analysis.get_mlp_activation(value, to_numpy=True),
+                    "pre_attn_norm_scales": Analysis.get_pre_attn_norm_scales(value, to_numpy=True),
+                    "pre_mlp_norm_scales": Analysis.get_pre_mlp_norm_scales(value, to_numpy=True),
+                    # "final_norm_scales": Analysis.get_final_norm_scales(value, to_numpy=True),
+                    # "post_attn_value": Analysis.get_post_attn_value(value, to_numpy=True),
+                    "hidden_states": Analysis.get_hidden_states(value, to_numpy=True),
+                    "post_attn_embedding": Analysis.get_post_attn_embedding(value, to_numpy=True),
+                    # "text_representation": Analysis.get_text_representation(value, to_numpy=True)
+                }
+                # shape b x t x d 
+
+            #### For VLM hidden states ####
+            outputs["vlm_layer_output"] = {
+                "mlp_activation": Analysis.get_mlp_activation(layer_output, to_numpy=True),
+                "pre_attn_norm_scales": Analysis.get_pre_attn_norm_scales(layer_output, to_numpy=True),
+                "pre_mlp_norm_scales": Analysis.get_pre_mlp_norm_scales(layer_output, to_numpy=True),
+                # "final_norm_scales": Analysis.get_final_norm_scales(layer_output, to_numpy=True),
+                # "post_attn_value": Analysis.get_post_attn_value(layer_output, to_numpy=True),
+                "hidden_states": Analysis.get_hidden_states(layer_output, to_numpy=True),
+                "post_attn_embedding": Analysis.get_post_attn_embedding(layer_output, to_numpy=True),
+                # "text_representation": Analysis.get_text_representation(layer_output, to_numpy=True)
+            }
+
         return outputs
 
     @property
