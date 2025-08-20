@@ -1,3 +1,18 @@
+# ==========================================================================================
+# This script runs language-conditioned policy experiments in the LIBERO benchmark suite.
+# It evaluates the effect of prompt interventions (e.g., blanking, obscuring, or reconstructing
+# the language prompt) on task success rates, using a vision-language-action model (Pi0).
+#
+# The code supports saving replay videos, logging detailed results, and running ablation
+# experiments to analyze how language information is preserved or lost under different
+# prompt manipulation strategies. The results are saved as JSON for further analysis.
+#
+# This experiment is part of a broader investigation into how well different experts
+# (VLM vs Action) in the Pi0 model encode and utilize language information, and is
+# related to the linear probing and expert separation analysis described in the
+# linear probing TODOs and documentation.
+# ==========================================================================================
+
 import collections
 import dataclasses
 import json

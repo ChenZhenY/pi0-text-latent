@@ -269,10 +269,12 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
                             }
                             
                             # Store latent states if available
-                            if "action_expert_hidden_states" in received:
-                                for key, value in received.items():
-                                    if "action_expert_hidden_states" in key:
-                                        rollout_data[key] = value
+                            count = 0 # NOTE: delete later
+                            for key, value in received.items():
+                                if "action_expert_state_time" in key:
+                                    rollout_data[key] = value
+                                    count += 1
+                            assert count > 0, f"No action expert hidden states found for task {task_id}"
                             
                             ### Store necessary information for VLM layer output
                             if "vlm_layer_output" in received:

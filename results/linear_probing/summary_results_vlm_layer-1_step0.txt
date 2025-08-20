@@ -1,0 +1,21 @@
+Linear Probing Results
+=====================
+
+Expert: vlm
+Layer: -1
+Rollout Step: 0
+Feature Type: hidden_states
+Action Timestep: 0.9
+
+Accuracy: 1.0000
+Cosine Similarity: 1.0000
+Number of Samples: 1
+Number of Tasks: 1
+Feature Dimension: 2048
+T5 Embedding Dimension: 512
+
+Per-Task Accuracies:
+  pick up the salad dressing and place it in the basket: 1.0000
+
+Task Descriptions:
+  0: pick up the salad dressing and place it in the basket

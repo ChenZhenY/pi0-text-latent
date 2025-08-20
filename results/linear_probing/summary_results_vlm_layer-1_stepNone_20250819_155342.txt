@@ -1,0 +1,37 @@
+Linear Probing Results
+=====================
+
+Expert: vlm
+Layer: -1
+Rollout Step: None
+Feature Type: hidden_states
+Action Timestep: 9
+
+Accuracy: 0.0657
+Cosine Similarity: 1.0000
+Number of Samples: 137
+Number of Tasks: 9
+Feature Dimension: 2048
+T5 Embedding Dimension: 512
+
+Per-Task Accuracies:
+  pick up the alphabet soup and place it in the basket: 0.0556
+  pick up the cream cheese and place it in the basket: 0.0714
+  pick up the salad dressing and place it in the basket: 0.0769
+  pick up the bbq sauce and place it in the basket: 0.0588
+  pick up the ketchup and place it in the basket: 0.0625
+  pick up the tomato sauce and place it in the basket: 0.0769
+  pick up the butter and place it in the basket: 0.0667
+  pick up the milk and place it in the basket: 0.0714
+  pick up the chocolate pudding and place it in the basket: 0.0588
+
+Task Descriptions:
+  0: pick up the alphabet soup and place it in the basket
+  1: pick up the cream cheese and place it in the basket
+  2: pick up the salad dressing and place it in the basket
+  3: pick up the bbq sauce and place it in the basket
+  4: pick up the ketchup and place it in the basket
+  5: pick up the tomato sauce and place it in the basket
+  6: pick up the butter and place it in the basket
+  7: pick up the milk and place it in the basket
+  8: pick up the chocolate pudding and place it in the basket

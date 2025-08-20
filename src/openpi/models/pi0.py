@@ -410,7 +410,7 @@ class Pi0(_model.BaseModel):
                 [None, suffix_tokens], mask=full_attn_mask, positions=positions, kv_cache=kv_cache,
             )
 
-            action_expert_output["action_expert_state_time{}".format(time)] = action_expert_layer_output
+            action_expert_output["action_expert_state_time{:.1f}".format(round(float(time), 1))] = action_expert_layer_output
             assert prefix_out is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon:])
 
