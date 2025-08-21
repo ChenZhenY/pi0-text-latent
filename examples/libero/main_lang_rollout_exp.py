@@ -356,14 +356,19 @@ def eval_libero(args: Args) -> None:
         # Get default LIBERO initial states
         # initial_states = task_suite.get_task_init_states(task_id)
         # TODO: change the task description here
-        task_description_change = "pick up the bbq sauce and place it in the basket"
+        # scence_prompt = "pick up the bbq sauce and place it in the basket"
+        # description_prompt = "pick up the alphabet soup and place it in the basket"
+        scence_prompt = "pick up the milk and place it in the basket"
+        description_prompt = "pick up the cream cheese and place it in the basket"
+
+        task_description_change = description_prompt
         rollout_task_swap_step = range(0, 20)
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed) # real task description
 
         # TODO: hacky
-        if task_description != "pick up the alphabet soup and place it in the basket":
+        if task_description != scence_prompt:
             continue
 
         # Loop over each rollout_task_swap_step for this task
@@ -397,6 +402,9 @@ def eval_libero(args: Args) -> None:
                 replay_images = []
                 replay_wrist_images = []
 
+                if "has_logged_swap" in locals():
+                    del has_logged_swap
+                
                 logging.info(f"Starting episode {task_episodes + 1}...")
                 while t < max_steps + args.num_steps_wait:
                     try:
