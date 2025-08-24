@@ -89,7 +89,7 @@ class Policy(BasePolicy):
     ):
         # self._sample_actions = model.sample_actions # stop jit for debugging
         self._sample_actions = nnx_utils.module_jit(model.sample_actions)
-        self._sample_actions_with_latent = nnx_utils.module_jit(model.sample_actions_with_latent)        
+        self._sample_actions_with_latent = nnx_utils.module_jit(model.sample_actions_with_latents)       
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)

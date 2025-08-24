@@ -15,7 +15,7 @@ import openpi.training.config as _config
 import openpi.training.sharding as sharding
 import openpi.transforms as _transforms
 from openpi import EXP_DATA_PATH
-from openpi.models.pi0 import Pi0
+from openpi.models.pi0_linear_probing import Pi0
 from openpi.shared import nnx_utils
 from openpi.shared.download import maybe_download
 from openpi.training.data_loader import TorchDataLoader, TransformedDataset

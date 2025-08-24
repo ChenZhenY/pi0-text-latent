@@ -86,7 +86,14 @@
   )
 
   (:goal
-    (And (In salad_dressing_1 basket_1_contain_region))
+    (And
+      (In salad_dressing_1 basket_1_contain_region)
+      (In ketchup_1 basket_1_contain_region)
+      (In alphabet_soup_1 basket_1_contain_region)
+      (In cream_cheese_1 basket_1_contain_region)
+      (In milk_1 basket_1_contain_region)
+      (In tomato_sauce_1 basket_1_contain_region)
+    )
   )
 
 )

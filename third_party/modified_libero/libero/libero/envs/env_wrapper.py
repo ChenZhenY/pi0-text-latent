@@ -84,8 +84,8 @@ class ControlEnv:
     def obj_of_interest(self):
         return self.env.obj_of_interest
 
-    def step(self, action):
-        return self.env.step(action)
+    def step(self, action, return_success_dict=False):
+        return self.env.step(action, return_success_dict=return_success_dict)
 
     def reset(self):
         success = False

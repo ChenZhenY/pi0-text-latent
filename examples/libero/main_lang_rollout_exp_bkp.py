@@ -46,8 +46,7 @@ class Args:
     # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90,
     task_suite_name: str = "libero_object_ood"  # libero_spatial_ood, libero_object_ood, libero_goal_ood
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
-    num_trials_per_task: int = 10  # Number of rollouts per task
-    return_success_dict: bool = True
+    num_trials_per_task: int = 5  # Number of rollouts per task
 
     #################################################################################################################
     # Utils
@@ -350,7 +349,6 @@ def eval_libero(args: Args) -> None:
     # Start evaluation
     results = {}
     total_episodes, total_successes, total_steps = 0, 0, 0
-    
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         # Get task
         task = task_suite.get_task(task_id)
@@ -364,7 +362,7 @@ def eval_libero(args: Args) -> None:
         # description_prompt = "pick up the cream cheese and place it in the basket"
 
         task_description_change = description_prompt
-        rollout_task_swap_step = range(0, 201, 10)
+        rollout_task_swap_step = range(0, 20)
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed) # real task description
@@ -381,8 +379,6 @@ def eval_libero(args: Args) -> None:
                 swap_prompt = task_description_change.replace(" ", "_")
                 swap_step_dir = f"swap_step_{swap_step}"
                 (pathlib.Path(args.video_out_path) / f"{task_segment}/{swap_step_dir}_{swap_prompt}").mkdir(parents=True, exist_ok=False)
-
-            task_done_accumulator = {}
 
             # Start episodes
             task_episodes, task_successes = 0, 0
@@ -405,7 +401,6 @@ def eval_libero(args: Args) -> None:
                 t = 0
                 replay_images = []
                 replay_wrist_images = []
-                episode_done = False
 
                 if "has_logged_swap" in locals():
                     del has_logged_swap
@@ -549,46 +544,11 @@ def eval_libero(args: Args) -> None:
                             marker_params.append(to_draw_data)
 
                         # Execute action in environment
-                        obs, reward, done, info = env.step(action.tolist(), return_success_dict=args.return_success_dict)
-                        
-                        # Check if done is a dictionary and if any key is True
-                        episode_done = False
-                        episode_done_dict = None
-                        if isinstance(done, dict):
-                            # Check if any key in the done dictionary is True
-                            episode_done = any(done.values())
-                            episode_done_dict = done
-                            if episode_done:
-                                # Log the done dictionary and timestep information
-                                logging.info(f"Episode completed at timestep {t} with done dictionary: {done}")
-                                logging.info(f"Episode result: {done}")
-                                
-                                # Accumulate done values for this task
-                                for key, value in done.items():
-                                    if key not in task_done_accumulator:
-                                        task_done_accumulator[key] = 0
-                                    if value:  # If the value is True
-                                        task_done_accumulator[key] += 1
-                                
-                                task_successes += 1
-                                total_successes += 1
-                                break
-                        elif done:
-                            # Handle case where done is still a boolean for backward compatibility
-                            episode_done = True
-                            episode_done_dict = {"success": done}
-                            logging.info(f"Episode completed at timestep {t} with done: {done}")
-                            
-                            # Accumulate done values for this task (boolean case)
-                            if "success" not in task_done_accumulator:
-                                task_done_accumulator["success"] = 0
-                            if done:
-                                task_done_accumulator["success"] += 1
-                            
+                        obs, reward, done, info = env.step(action.tolist())
+                        if done:
                             task_successes += 1
                             total_successes += 1
                             break
-                        
                         t += 1
 
                     except Exception as e:
@@ -599,7 +559,7 @@ def eval_libero(args: Args) -> None:
                 total_episodes += 1
 
                 # Save a replay video of the episode
-                suffix = "success" if episode_done else "failure"
+                suffix = "success" if done else "failure"
                 input_prompt = task_description.replace(" ", "_")
                 swap_prompt = task_description_change.replace(" ", "_")
 
@@ -620,15 +580,8 @@ def eval_libero(args: Args) -> None:
                     for idx, img in enumerate(replay_images):
                         cv2.imwrite(str(dir / f"{idx}.png"), cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
-            task_done_accumulator["swap_step"] = swap_step
-            task_done_accumulator["total_trials"] = args.num_trials_per_task
-            with open(pathlib.Path(args.video_out_path) / f"{task_segment}/{swap_step_dir}_{swap_prompt}/result.json", "w") as f:
-                json.dump(task_done_accumulator, f, indent=4)
-
             # Log current results
-            logging.info(f"Swap step: {swap_step}")
-            logging.info(f"task done info: {task_done_accumulator}")
-            logging.info(f"Success: {episode_done}")
+            logging.info(f"Success: {done}")
             logging.info(f"Intervention: {args.layer_to_intervene}")
             logging.info(f"# episodes completed so far: {total_episodes}")
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
@@ -646,17 +599,6 @@ def eval_libero(args: Args) -> None:
     logging.info(f"Total episodes: {total_episodes}")
     results["total_success_rate"] = float(total_successes) / float(total_episodes)
     results["total_episodes"] = total_episodes
-    
-    # Add accumulated done results for each task
-    results["task_done_accumulator"] = task_done_accumulator
-    
-    # Log accumulated done results for each task
-    logging.info("Accumulated done results for each task:")
-    # for task_key, done_counts in task_done_accumulator.items():
-    #     logging.info(f"Task: {task_key}")
-    #     for done_key, count in done_counts.items():
-    #         logging.info(f"  {done_key}: {count}")
-    
     if args.obscure_prompt:
         results["reconstruct_prompt"] = reconstruct_prompt
     results["args"] = dataclasses.asdict(args)

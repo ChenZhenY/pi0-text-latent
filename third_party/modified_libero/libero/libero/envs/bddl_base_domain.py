@@ -776,7 +776,7 @@ class BDDLBaseDomain(SingleArmEnv):
                     self.sim.model.body_pos[body_id] = obj_pos
                     self.sim.model.body_quat[body_id] = obj_quat
 
-    def _check_success(self):
+    def _check_success(self, return_success_dict=False):
         """
         This needs to match with the goal description from the bddl file
 
@@ -797,14 +797,14 @@ class BDDLBaseDomain(SingleArmEnv):
         # Run superclass method first
         super().visualize(vis_settings=vis_settings)
 
-    def step(self, action):
+    def step(self, action, return_success_dict=False):
         if self.action_dim == 4 and len(action) > 4:
             # Convert OSC_POSITION action
             action = np.array(action)
             action = np.concatenate((action[:3], action[-1:]), axis=-1)
 
         obs, reward, done, info = super().step(action)
-        done = self._check_success()
+        done = self._check_success(return_success_dict=return_success_dict)
 
         return obs, reward, done, info
 

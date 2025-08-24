@@ -54,9 +54,9 @@ class TrainingConfig:
     num_epochs: int = 100
     batch_size: int = 32
     seed: int = 42
-    train_split: float = 0.8  # Fraction of data for training
-    eval_split: float = 0.1  # Fraction of data for evaluation
-    test_split: float = 0.1  # Fraction of data for testing
+    train_split: float = 0.7  # Fraction of data for training
+    eval_split: float = 0.15  # Fraction of data for evaluation
+    test_split: float = 0.15  # Fraction of data for testing
 
 
 class LinearProbe(nn.Module):
