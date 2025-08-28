@@ -19,7 +19,6 @@ from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 from openpi_client import base_policy as _base_policy
 
-
 def load_hidden_states(file_path, num_valid_token, offset):
     print("Using: {}".format(os.path.basename(file_path)))
     with open(file_path, "rb") as f:
@@ -211,13 +210,14 @@ class Policy(BasePolicy):
         self._rng, sample_rng = jax.random.split(self._rng)
 
         if obs.get("collect_latents", True):
-            action, layer_output, action_expert_output = self._sample_actions_with_latent(sample_rng,
+            action, vision_latents, layer_outputs = self._sample_actions_with_latent(sample_rng,
                                                         _model.Observation.from_dict(inputs),
                                                         **self._sample_kwargs)
         else:
-            action, layer_output = self._sample_actions(sample_rng,
+            action, vision_latents = self._sample_actions(sample_rng,
                                                         _model.Observation.from_dict(inputs),
                                                         **self._sample_kwargs)
+            layer_outputs = None
         
         self._sample_kwargs = {}  # clean every step
         outputs = {
@@ -235,31 +235,40 @@ class Policy(BasePolicy):
         # we need to convert the hidden state to np array from jax array
         if obs.get("collect_latents", True):
             from openpi.models.gemma import Analysis
-            #### For action expert hidden states ####
-            for key, value in action_expert_output.items():
-                outputs[key] = {
-                    # "mlp_activation": Analysis.get_mlp_activation(value, to_numpy=True),
-                    "pre_attn_norm_scales": Analysis.get_pre_attn_norm_scales(value, to_numpy=True),
-                    "pre_mlp_norm_scales": Analysis.get_pre_mlp_norm_scales(value, to_numpy=True),
-                    # "final_norm_scales": Analysis.get_final_norm_scales(value, to_numpy=True),
-                    # "post_attn_value": Analysis.get_post_attn_value(value, to_numpy=True),
-                    "hidden_states": Analysis.get_hidden_states(value, to_numpy=True),
-                    "post_attn_embedding": Analysis.get_post_attn_embedding(value, to_numpy=True),
-                    # "text_representation": Analysis.get_text_representation(value, to_numpy=True)
-                }
-                # shape b x t x d 
-
+            
             #### For VLM hidden states ####
-            outputs["vlm_layer_output"] = {
-                "mlp_activation": Analysis.get_mlp_activation(layer_output, to_numpy=True),
-                "pre_attn_norm_scales": Analysis.get_pre_attn_norm_scales(layer_output, to_numpy=True),
-                "pre_mlp_norm_scales": Analysis.get_pre_mlp_norm_scales(layer_output, to_numpy=True),
-                # "final_norm_scales": Analysis.get_final_norm_scales(layer_output, to_numpy=True),
-                # "post_attn_value": Analysis.get_post_attn_value(layer_output, to_numpy=True),
-                "hidden_states": Analysis.get_hidden_states(layer_output, to_numpy=True),
-                "post_attn_embedding": Analysis.get_post_attn_embedding(layer_output, to_numpy=True),
-                # "text_representation": Analysis.get_text_representation(layer_output, to_numpy=True)
-            }
+            if layer_outputs is not None:
+                outputs["vlm_layer_output"] = {
+                    "mlp_activation": Analysis.get_mlp_activation(layer_outputs, to_numpy=True),
+                    "pre_attn_norm_scales": Analysis.get_pre_attn_norm_scales(layer_outputs, to_numpy=True),
+                    "pre_mlp_norm_scales": Analysis.get_pre_mlp_norm_scales(layer_outputs, to_numpy=True),
+                    # "final_norm_scales": Analysis.get_final_norm_scales(layer_outputs, to_numpy=True),
+                    # "post_attn_value": Analysis.get_post_attn_value(layer_outputs, to_numpy=True),
+                    "hidden_states": Analysis.get_hidden_states(layer_outputs, to_numpy=True),
+                    "post_attn_embedding": Analysis.get_post_attn_embedding(layer_outputs, to_numpy=True),
+                    # "text_representation": Analysis.get_text_representation(layer_outputs, to_numpy=True)
+                }
+
+        if obs.get("collect_visual_latent", True):
+            # Convert vision latents to numpy and add to outputs
+            # Vision latents contain intermediate representations from the siglip vision encoder
+            # for each image (base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb)
+            vision_latents_np = {}
+            for image_name, latents in vision_latents.items():
+                vision_latents_np[image_name] = {}
+                for key, value in latents.items():
+                    if hasattr(value, 'shape'):
+                        # Convert JAX array to numpy
+                        vision_latents_np[image_name][key] = np.asarray(value[0, ...].astype(jnp.float32))  # Remove batch dimension
+                        # print(f"key: {key}")
+                        # print(f"vision latents shape: {vision_latents_np[image_name][key].shape}")
+
+                    # NOTE: we don't handle nested dictionaries (like encoder outputs)
+                    # else:
+                    #     # Handle nested dictionaries (like encoder outputs)
+                    #     print(f"key not hanlded***: {key}")
+                        # vision_latents_np[image_name][key] = value
+            outputs["vision_latents"] = vision_latents_np
 
         return outputs
 

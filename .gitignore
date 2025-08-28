@@ -4,6 +4,7 @@ checkpoints/
 exp_data/
 data/
 wandb/
+results/
 .idea
 *.npy
 **.pkl

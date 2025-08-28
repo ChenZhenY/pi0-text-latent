@@ -15,6 +15,14 @@ def print_dict_structure(d, indent=0):
             print_dict_structure(value, indent + 1)
         elif isinstance(value, np.ndarray):
             print("  " * indent + f"{key}: numpy array with shape {value.shape}")
+            # if key == "pre_logits":
+            #     print(value)
+            # if key == "agentview_image":
+            #     # Save right wrist RGB image as PNG
+            #     import matplotlib.pyplot as plt
+            #     plt.imsave("right_wrist_rgb.png", value.astype(np.uint8))
+            #     print("  " * indent + f"Saved right wrist RGB image to right_wrist_rgb.png")
+            #     break
         elif isinstance(value, list):
             print("  " * indent + f"{key}: list with length {len(value)}")
         else:
@@ -34,5 +42,8 @@ def test_inference_latent_structure(pkl_path):
 if __name__ == "__main__":
     # Example usage
     # pkl_path = pathlib.Path("data/inference_latents/task_0_pick_up_the_block.pkl")
-    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0826_visual_latent/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_bbq_sauce_and_place_it_in_the_basket.pkl"
+    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
     test_inference_latent_structure(pkl_path)

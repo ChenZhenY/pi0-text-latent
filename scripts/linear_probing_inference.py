@@ -14,6 +14,9 @@ Usage:
         --data_path data/inference_latents \
         --task_range 0 10 \
         --episode_range 0 5
+
+Usage for visual encoder:
+python scripts/linear_probing_inference.py      --expert visual      --data_path data/inference_latents/0826_visual_latent     --task_range 0 8     --episode_range 0 1     --num_epochs 200     --batch_size 32        
 """
 
 import argparse
@@ -133,7 +136,11 @@ class InferenceLatentDataset(Dataset):
         
         logging.info(f"Loading data from {data_path}")
         logging.info(f"Task range: {task_start}-{task_end}, Episode range: {episode_start}-{episode_end}")
-        logging.info(f"Rollout step: {self.config.rollout_step}, Expert: {self.config.expert}, Layer: {self.config.layer}")
+        logging.info(f"Rollout step: {self.config.rollout_step}, Expert: {self.config.expert}")
+        if self.config.expert != "visual":
+            logging.info(f"Layer: {self.config.layer}")
+        else:
+            logging.info(f"Visual feature type: pre_logits")
         
         for task_id in range(task_start, task_end):
             # Find task file
@@ -180,10 +187,14 @@ class InferenceLatentDataset(Dataset):
 
                         step_data = episode_data["rollout_steps"][step_key]
 
+                        # Overwrite label_id (task description) if it is different in the step data
+                        if 
+
                         # Extract features based on expert type
                         features = self._extract_features(step_data)
                         if features is not None:
                             if isinstance(features, list):
+                                # For visual expert, each camera view becomes a separate datapoint
                                 self.features.extend(features)
                                 self.labels.extend([label_idx] * len(features))
                             else:
@@ -201,10 +212,25 @@ class InferenceLatentDataset(Dataset):
                     # Extract features based on expert type
                     features = self._extract_features(step_data)
                     if features is not None:
-                        self.features.append(features)
-                        self.labels.append(label_idx)
+                        if isinstance(features, list):
+                            # For visual expert, each camera view becomes a separate datapoint
+                            self.features.extend(features)
+                            self.labels.extend([label_idx] * len(features))
+                        else:
+                            self.features.append(features)
+                            self.labels.append(label_idx)
         
         logging.info(f"Loaded {len(self.features)} samples with {len(self.task_descriptions)} unique tasks")
+        
+        if self.config.expert == "visual":
+            # Count samples per task for visual expert
+            task_counts = {}
+            for label in self.labels:
+                task_desc = self.task_descriptions[label]
+                task_counts[task_desc] = task_counts.get(task_desc, 0) + 1
+            logging.info(f"Visual expert samples per task:")
+            for task_desc, count in task_counts.items():
+                logging.info(f"  {task_desc}: {count} samples")
         
         if len(self.features) == 0:
             raise ValueError("No valid features found. Check data path and configuration.")
@@ -287,6 +313,40 @@ class InferenceLatentDataset(Dataset):
                 features = torch.mean(layer_features, dim=0)
                 return features
 
+            elif self.config.expert == "visual":
+                if "vision_latents" not in step_data:
+                    logging.debug("vision_latents not found in step data")
+                    return None
+                
+                vision_data = step_data["vision_latents"]
+                features_list = []
+                
+                # Extract pre_logits from each RGB camera view
+                for camera_key in ["base_0_rgb", "left_wrist_0_rgb"]: # "right_wrist_0_rgb"]:
+                    if camera_key not in vision_data:
+                        logging.debug(f"{camera_key} not found in vision_latents")
+                        continue
+                    
+                    camera_data = vision_data[camera_key]
+                    if "pre_logits" not in camera_data:
+                        logging.debug(f"pre_logits not found in {camera_key}")
+                        continue
+                    
+                    pre_logits = camera_data["pre_logits"]
+                    if isinstance(pre_logits, np.ndarray):
+                        pre_logits = torch.from_numpy(pre_logits).float()
+                    
+                    # pre_logits shape is (256, 1152), mean pool over spatial dimension
+                    features = torch.mean(pre_logits, dim=0)  # Shape: (1152,)
+                    features_list.append(features)
+                
+                if not features_list:
+                    logging.debug("No valid visual features found")
+                    return None
+                
+                # Return list of features, one for each camera view
+                return features_list
+
             else:
                 raise ValueError(f"Unknown expert type: {self.config.expert}")
 
@@ -298,15 +358,13 @@ class InferenceLatentDataset(Dataset):
             logging.error(f"Error extracting features: {e}")
             return None
     
-
-    
     def get_task_descriptions(self) -> List[str]:
         """Return list of task descriptions."""
         return self.task_descriptions
         
     def get_data_info(self) -> Dict:
         """Return information about loaded data."""
-        return {
+        info = {
             "num_samples": len(self.features),
             "num_tasks": len(self.task_descriptions),
             "task_descriptions": self.task_descriptions,
@@ -317,6 +375,13 @@ class InferenceLatentDataset(Dataset):
             "action_timestep": self.config.action_timestep if self.config.expert == "action" else None,
             "feature_dim": self.features[0].shape[0] if self.features else None
         }
+        
+        # Add visual-specific information
+        if self.config.expert == "visual":
+            info["camera_views"] = ["base_0_rgb", "left_wrist_0_rgb"] # , "right_wrist_0_rgb"]
+            info["visual_feature_type"] = "pre_logits"
+        
+        return info
 
 
 def create_t5_labels(task_descriptions: List[str], 
@@ -620,7 +685,7 @@ def train(train_dataset: InferenceLatentDataset,
 
 def compute_accuracy(predictions: torch.Tensor, 
                     targets: torch.Tensor) -> float:
-    """Compute classification accuracy using cosine similarity with proper handling of duplicate targets."""
+    """Compute classification accuracy using cosine similarity."""
     with torch.no_grad():
         # Normalize predictions and targets
         predictions_norm = nn.functional.normalize(predictions, p=2, dim=1)
@@ -629,23 +694,18 @@ def compute_accuracy(predictions: torch.Tensor,
         # Compute cosine similarities between all pairs
         similarities = torch.mm(predictions_norm, targets_norm.T)
         
-        # For each prediction, find all targets that have the maximum similarity
-        # This handles the case where multiple targets might have the same T5 embedding
-        max_similarities = torch.max(similarities, dim=1, keepdim=True)[0]
-        max_mask = (similarities >= max_similarities - 1e-6)  # Allow for small numerical differences
+        # For each prediction, find the target with maximum similarity
+        max_indices = torch.argmax(similarities, dim=1)
         
-        # For each prediction, check if the true target is among the best matches
+        # Check if the predicted target matches the true target
         correct_predictions = 0
         for i in range(predictions.shape[0]):
-            # Get the true target for this prediction
+            predicted_target_idx = max_indices[i]
             true_target = targets[i]
+            predicted_target = targets[predicted_target_idx]
             
-            # Find all targets that match the true target (handles duplicates)
-            target_matches = torch.all(targets == true_target, dim=1)
-            
-            # Check if any of the best matches for this prediction include the true target
-            best_matches_for_prediction = max_mask[i]
-            if torch.any(best_matches_for_prediction & target_matches):
+            # Check if predicted target matches true target (allowing for small numerical differences)
+            if torch.allclose(true_target, predicted_target, atol=1e-6):
                 correct_predictions += 1
         
         accuracy = correct_predictions / predictions.shape[0]
@@ -709,6 +769,7 @@ def analyze_results(model: nn.Module,
     
     # Per-task analysis
     task_accuracies = {}
+    task_sample_counts = {}
     for task_idx, task_desc in enumerate(test_dataset.task_descriptions):
         task_mask = (labels == task_idx)
         if task_mask.sum() > 0:
@@ -716,7 +777,8 @@ def analyze_results(model: nn.Module,
             task_targets = targets[task_mask]
             task_accuracy = compute_accuracy(task_predictions, task_targets)
             task_accuracies[task_desc] = task_accuracy
-    
+            task_sample_counts[task_desc] = task_mask.sum().item()
+
     results = {
         'accuracy': accuracy,
         'cosine_similarity': cosine_sim,
@@ -730,6 +792,9 @@ def analyze_results(model: nn.Module,
         'feature_dim': predictions.shape[1],
         't5_dim': targets.shape[1]
     }
+
+    # Add detailed analysis to results
+    results['task_sample_counts'] = task_sample_counts
     
     logging.info(f"Test Results:")
     logging.info(f"  Accuracy: {accuracy:.4f}")
@@ -748,9 +813,12 @@ def save_results(results: Dict, config: DataConfig,
     # Create filename based on configuration
     import datetime
     time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename_base = f"results_{config.expert}_layer{config.layer}_step{config.rollout_step}"
-    if config.expert == "action":
-        filename_base += f"_t{config.action_timestep}"
+    if config.expert == "visual":
+        filename_base = f"results_{config.expert}_prelogits_step{config.rollout_step}"
+    else:
+        filename_base = f"results_{config.expert}_layer{config.layer}_step{config.rollout_step}"
+        if config.expert == "action":
+            filename_base += f"_t{config.action_timestep}"
     filename_base += f"_{time_str}"
     
     # Save results
@@ -764,7 +832,10 @@ def save_results(results: Dict, config: DataConfig,
         f.write(f"Linear Probing Results\n")
         f.write(f"=====================\n\n")
         f.write(f"Expert: {config.expert}\n")
-        f.write(f"Layer: {config.layer}\n")
+        if config.expert == "visual":
+            f.write(f"Visual Feature Type: pre_logits\n")
+        else:
+            f.write(f"Layer: {config.layer}\n")
         f.write(f"Rollout Step: {config.rollout_step}\n")
         f.write(f"Feature Type: {config.feature_type}\n")
         if config.action_timestep:
@@ -787,7 +858,8 @@ def save_results(results: Dict, config: DataConfig,
         
         f.write(f"Per-Task Accuracies:\n")
         for task_desc, acc in results['task_accuracies'].items():
-            f.write(f"  {task_desc}: {acc:.4f}\n")
+            sample_count = results.get('task_sample_counts', {}).get(task_desc, 'N/A')
+            f.write(f"  {task_desc}: {acc:.4f} ({sample_count} samples)\n")
         
         f.write(f"\nTask Descriptions:\n")
         for i, desc in enumerate(results['task_descriptions']):
@@ -811,10 +883,10 @@ def parse_args():
     parser.add_argument("--rollout_step", type=int, default=None,
                        help="Specific rollout step to analyze, this is used to index into the rollout_steps dictionary, not necessarily the same as the step number in the episode")
     parser.add_argument("--expert", type=str, required=True, 
-                       choices=["vlm", "action", "text_only"],
+                       choices=["vlm", "action", "text_only", "visual"],
                        help="Expert type to analyze")
-    parser.add_argument("--layer", type=int, required=True,
-                       help="Layer ID to analyze (0-17)")
+    parser.add_argument("--layer", type=int, required=False, default=-1,
+                       help="Layer ID to analyze (0-17), not needed for visual expert")
     parser.add_argument("--data_path", type=str, required=True,
                        help="Path to inference latent data")
     parser.add_argument("--task_range", type=int, nargs=2, required=True,
@@ -887,7 +959,11 @@ def sanity_check_data_loading(config: DataConfig):
         data_info = dataset.get_data_info()
         logging.info("✓ Data info retrieved successfully")
         logging.info(f"  - Expert: {data_info['expert_type']}")
-        logging.info(f"  - Layer: {data_info['layer']}")
+        if data_info['expert_type'] == "visual":
+            logging.info(f"  - Visual feature type: {data_info.get('visual_feature_type', 'N/A')}")
+            logging.info(f"  - Camera views: {data_info.get('camera_views', [])}")
+        else:
+            logging.info(f"  - Layer: {data_info['layer']}")
         logging.info(f"  - Rollout step: {data_info['rollout_step']}")
         logging.info(f"  - Feature type: {data_info['feature_type']}")
         if data_info['action_timestep']:
@@ -939,6 +1015,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
     
+    # Validate arguments
+    if args.expert != "visual" and args.layer == -1:
+        logging.error("Layer argument is required for non-visual experts")
+        return
+    
     # Create configurations
     data_config = DataConfig(
         data_path=args.data_path,
@@ -946,7 +1027,7 @@ def main():
         episode_range=tuple(args.episode_range),
         rollout_step=args.rollout_step,
         expert=args.expert,
-        layer=args.layer,
+        layer=args.layer if args.expert != "visual" else -1,
         action_timestep=args.action_timestep,
         seed=args.seed
     )
@@ -984,6 +1065,9 @@ def main():
     logging.info(f"  - Tasks: {data_info['num_tasks']}")
     logging.info(f"  - Feature dimension: {data_info['feature_dim']}")
     logging.info(f"  - T5 embedding dimension: {t5_labels.shape[1]}")
+    if data_info['expert_type'] == "visual":
+        logging.info(f"  - Camera views: {data_info.get('camera_views', [])}")
+        logging.info(f"  - Visual feature type: {data_info.get('visual_feature_type', 'N/A')}")
     
     # Train linear probe
     logging.info("Training linear probe...")

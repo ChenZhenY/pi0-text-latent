@@ -175,13 +175,33 @@ class Pi0(_model.BaseModel):
     @at.typecheck
     def embed_prefix(
             self, obs: _model.Observation
-    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
+    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"], dict]:
+        """Embed prefix tokens from images and text.
+        
+        Returns:
+            tokens: Concatenated tokens from all images and text
+            input_mask: Boolean mask indicating valid tokens
+            ar_mask: Boolean mask for autoregressive attention
+            vision_latents: Dictionary containing vision encoder outputs for each image.
+                          Keys are image names (e.g., "base_0_rgb", "left_wrist_0_rgb").
+                          Values are dictionaries containing intermediate representations
+                          from the siglip vision encoder, including:
+                          - "encoded": Final encoded features [B, H*W, D]
+                          - "pre_logits": Pooled features [B, D] 
+                          - "pre_logits_2d": 2D features [B, H, W, D]
+                          - "stem": Initial patch embeddings
+                          - "with_posemb": Features with positional embeddings
+                          - "encoder": All transformer layer outputs
+        """
         input_mask = []
         ar_mask = []
         tokens = []
+        vision_latents = {}
         # embed images
         for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
+            image_tokens, vision_output = self.PaliGemma.img(obs.images[name], train=False)
+            # Store vision latents for each image
+            vision_latents[name] = vision_output
 
             tokens.append(image_tokens)
             input_mask.append(
@@ -204,7 +224,7 @@ class Pi0(_model.BaseModel):
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
-        return tokens, input_mask, ar_mask
+        return tokens, input_mask, ar_mask, vision_latents
 
     @at.typecheck
     def embed_suffix(
@@ -253,7 +273,7 @@ class Pi0(_model.BaseModel):
         u_t = noise - actions
 
         # one big forward pass of prefix + suffix at once
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask, _ = self.embed_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
@@ -301,7 +321,7 @@ class Pi0(_model.BaseModel):
         u_t = noise - actions
 
         # encode
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask, _ = self.embed_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(observation, x_t, time)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
@@ -355,8 +375,14 @@ class Pi0(_model.BaseModel):
                        num_steps: int | at.Int[at.Array, ""] = 10,
                        mlp_activation=None,
                        hidden_states_to_add=None,
-                       ) -> tuple[_model.Actions, tuple[at.Float[at.Array, "l b _t _d"] | None, at.Array,
-    at.Array, at.Array | None, list[at.Array | None], tuple[at.Array | None, at.Array | None]]]:
+                       ) -> tuple[_model.Actions, dict]:
+        """Sample actions using diffusion process.
+        
+        Returns:
+            actions: Sampled actions [B, H, D] where B=batch_size, H=action_horizon, D=action_dim
+            vision_latents: Dictionary containing vision encoder outputs for each image.
+                          See embed_prefix docstring for details on the structure.
+        """
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -365,7 +391,7 @@ class Pi0(_model.BaseModel):
         noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask, vision_latents = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         kv_cache, layer_output = self._encode(mlp_activation, prefix_tokens, prefix_attn_mask, positions,
@@ -410,7 +436,7 @@ class Pi0(_model.BaseModel):
             x_t, time = step((x_t, time))
 
         # x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
-        return x_t, layer_output
+        return x_t, vision_latents
 
     def sample_actions_with_latents(self,
                        rng: at.KeyArrayLike,
@@ -419,7 +445,15 @@ class Pi0(_model.BaseModel):
                        num_steps: int | at.Int[at.Array, ""] = 10,
                        mlp_activation=None,
                        hidden_states_to_add=None,
-                       ) -> tuple[_model.Actions, list]:
+                       ) -> tuple[_model.Actions, dict, list]:
+        """Sample actions using diffusion process and collect all intermediate latents.
+        
+        Returns:
+            actions: Sampled actions [B, H, D] where B=batch_size, H=action_horizon, D=action_dim
+            vision_latents: Dictionary containing vision encoder outputs for each image.
+                          See embed_prefix docstring for details on the structure.
+            layer_outputs: List of layer outputs from each diffusion step.
+        """
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -428,7 +462,7 @@ class Pi0(_model.BaseModel):
         noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask, vision_latents = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         kv_cache, prefix_layer_output = self._encode(mlp_activation, prefix_tokens, prefix_attn_mask, positions,
@@ -469,4 +503,4 @@ class Pi0(_model.BaseModel):
         all_latents = []
         (x_t, time), layer_output = jax.lax.scan(step, (x_t, time), jnp.arange(num_steps))
         
-        return x_t, layer_output
+        return x_t, vision_latents, layer_output

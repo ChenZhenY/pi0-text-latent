@@ -104,7 +104,7 @@ class InferenceLatentCollectionArgs:
     # LIBERO environment parameters
     task_suite_name: str = "libero_object"  # libero_spatial, libero_object, libero_goal
     num_steps_wait: int = 10
-    num_trials_per_task: int = 5
+    num_trials_per_task: int = 10
     max_steps: int = 280
     
     # Data collection parameters
@@ -118,12 +118,16 @@ class InferenceLatentCollectionArgs:
     
     # Sampling parameters
     tasks_to_collect: tuple = (10, 15)  # Range of tasks to collect
-    timestep_stride: int = 5  # Collect every Nth timestep to save memory
+    timestep_stride: int = 1 # 5  # Collect every Nth timestep to save memory
     replan_steps: int = 5
     
     # Utils
     seed: int = 42
-    output_path: str = "data/inference_latents"
+    output_path: str = "data/inference_latents/0827_visual_latent_single_scene"
+
+    # Latent collection parameters
+    collect_visual_latent: bool = True # vision latents
+    collect_latents: bool = False # vlm layer output
 
 
 def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
@@ -162,13 +166,19 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
         # Get task
         task = task_suite.get_task(task_id)
         task_description = task.language
+        scene_description = "pick up the bbq sauce and place it in the basket" # task_description # TODO: change to allow for more exps
+        scene_name = scene_description.replace(" ", "_")
         task_name = task_description.replace(" ", "_")
+
+        # TODO: hack for selecting specific tasks and then
+        if "alphabet" not in task_description:
+            continue
         
         logging.info(f"Collecting data for task {task_id}: {task_description}")
         
         # Create task-specific video directory if saving videos
         if args.save_video:
-            task_video_dir = video_dir / f"{task_name}"
+            task_video_dir = video_dir / f"{task_name}_{scene_name}"
             task_video_dir.mkdir(parents=True, exist_ok=True)
         
         task_data = {
@@ -239,7 +249,8 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
                             obs["robot0_gripper_qpos"],
                         ]),
                         "prompt": task_description,
-                        "collect_latents": True,  # Signal to collect latents
+                        "collect_latents": args.collect_latents,  # Signal to collect latents
+                        "collect_visual_latent": args.collect_visual_latent,
                         ###### args from text latent collection
                         "mask_prompt_method": None,
                         "use_TEI_and_TLI": False,
@@ -266,20 +277,27 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
                             rollout_data = {
                                 "timestep": t,
                                 "action": action_chunk[0].tolist() if len(action_chunk) > 0 else None,
+                                "prompt": task_description,
+                                "scene_description": scene_description,
                             }
                             
                             # Store latent states if available
-                            count = 0 # NOTE: delete later
-                            for key, value in received.items():
-                                if "action_expert_state_time" in key:
-                                    rollout_data[key] = value
-                                    count += 1
-                            assert count > 0, f"No action expert hidden states found for task {task_id}"
+                            if args.collect_latents:
+                                count = 0 # NOTE: delete later
+                                for key, value in received.items():
+                                    if "action_expert_state_time" in key:
+                                        rollout_data[key] = value
+                                        count += 1
+                                assert count > 0, f"No action expert hidden states found for task {task_id}"
                             
                             ### Store necessary information for VLM layer output
                             if "vlm_layer_output" in received:
                                 # from openpi.models.gemma import Analysis
                                 rollout_data["vlm_layer_output"] = received["vlm_layer_output"]
+
+                            ### Store necessary information for vision latents
+                            if "vision_latents" in received:
+                                rollout_data["vision_latents"] = received["vision_latents"]
 
                             # Store observation if requested
                             if args.save_observations:
@@ -332,7 +350,7 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
             logging.info(f"Episode {episode_idx + 1}/{args.num_trials_per_task} completed. Success: {episode_data['metadata']['success']}")
         
         # Save task data incrementally
-        task_save_path = output_dir / f"task_{task_id}_{task_name}.pkl"
+        task_save_path = output_dir / f"task_{task_id}_{task_name}_{scene_name}.pkl"
         with open(task_save_path, 'wb') as f:
             pickle.dump(task_data, f)
         
@@ -408,11 +426,14 @@ if __name__ == "__main__":
     args = InferenceLatentCollectionArgs(
         task_suite_name=suite_name,
         tasks_to_collect=(0, 9),  # Collect tasks 1-4
-        num_trials_per_task=1,
-        timestep_stride=10,  # Collect every 2nd inference timestep
+        num_trials_per_task=10,
+        timestep_stride=1,  # Collect every 2nd inference timestep
         max_steps=TASK_SUITE_MAX_STEPS[suite_name],
         save_video=True,  # Enable video saving
-        video_out_path="data/inference_latents/videos",  # Video output path
+        video_out_path="data/inference_latents/videos/0827_visual_latent_single_scene",  # Video output path
+        output_path="data/inference_latents/0827_visual_latent_single_scene",
+        collect_visual_latent=True,
+        collect_latents=False,
     )
     
     collect_inference_latents(args) 

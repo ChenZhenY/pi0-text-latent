@@ -29,6 +29,7 @@ from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
 
 from task_descriptions import LIBERO_TASK_DESCRIPTIONS
+from energy_tracking_wrapper import EnergyTrackingWrapper
 
 @dataclasses.dataclass
 class Args:
@@ -69,6 +70,9 @@ class Args:
     obscure_prompt = False
     obscure_prompt_layer = None
     use_only_two_prompt_for_libero_object = False
+
+    save_energy_data = False
+    save_visual_latent = True
     
     seed: int = 7  # Random Seed (for reproducibility)
 
@@ -191,7 +195,6 @@ hidden_states_mapping_file = dict(
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 marker_params = []
-
 
 def interpolate_colors(color1, color2, num_points=100):
     color1 = np.array(color1)
@@ -364,7 +367,8 @@ def eval_libero(args: Args) -> None:
         # description_prompt = "pick up the cream cheese and place it in the basket"
 
         task_description_change = description_prompt
-        rollout_task_swap_step = range(0, 201, 10)
+        # rollout_task_swap_step = range(0, 201, 10)
+        rollout_task_swap_step = [0]
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed) # real task description
@@ -551,6 +555,12 @@ def eval_libero(args: Args) -> None:
                         # Execute action in environment
                         obs, reward, done, info = env.step(action.tolist(), return_success_dict=args.return_success_dict)
                         
+                        # Access energy and torque data (available in info dict)
+                        # info['energy_consumption'] - total energy consumed so far
+                        # info['torque_squared'] - torque squared for current step
+                        # info['cumulative_torque_squared'] - sum of all torque squared values
+                        # info['instantaneous_power'] - power for current step
+                        
                         # Check if done is a dictionary and if any key is True
                         episode_done = False
                         episode_done_dict = None
@@ -620,6 +630,34 @@ def eval_libero(args: Args) -> None:
                     for idx, img in enumerate(replay_images):
                         cv2.imwrite(str(dir / f"{idx}.png"), cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
+                # Collect energy data from the episode
+                energy_data = env.get_energy_data()
+                torque_squared_stats = env.get_torque_squared_stats()
+                
+                # Save energy data for this episode
+                episode_energy_data = {
+                    'episode_idx': episode_idx,
+                    'success': episode_done,
+                    'total_energy': energy_data['total_energy'],
+                    'mean_torque_squared': torque_squared_stats['mean_torque_squared'].tolist(),
+                    'total_torque_squared_sum': torque_squared_stats['total_torque_squared_sum'],
+                    'max_torque_squared': torque_squared_stats['max_torque_squared'].tolist(),
+                    'min_torque_squared': torque_squared_stats['min_torque_squared'].tolist(),
+                    'timesteps': len(energy_data['timestep_history'])
+                }
+                
+                # Save episode energy data
+                energy_file_path = pathlib.Path(args.video_out_path) / f"{task_segment}/{swap_step_dir}_{swap_prompt}/energy_data_{suffix}_{episode_idx}.json"
+                with open(energy_file_path, "w") as f:
+                    json.dump(episode_energy_data, f, indent=4)
+                
+                # Log energy consumption
+                logging.info(f"Episode {episode_idx} energy consumption: {energy_data['total_energy']:.4f} J")
+                logging.info(f"Episode {episode_idx} total torque squared: {torque_squared_stats['total_torque_squared_sum']:.4f}")
+                
+                # Reset energy tracking for next episode
+                env.reset_energy_tracking()
+
             task_done_accumulator["swap_step"] = swap_step
             task_done_accumulator["total_trials"] = args.num_trials_per_task
             with open(pathlib.Path(args.video_out_path) / f"{task_segment}/{swap_step_dir}_{swap_prompt}/result.json", "w") as f:
@@ -634,6 +672,22 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
             logging.info(f"mean steps so far: {total_steps / total_episodes:.1f}")
 
+            if args.save_energy_data:
+                # Collect and save task-level energy summary
+                task_energy_summary = {
+                    'swap_step': swap_step,
+                    'task_successes': task_successes,
+                    'task_episodes': task_episodes,
+                    'success_rate': task_successes / task_episodes,
+                    'energy_data_files': [f"energy_data_success_{i}.json" for i in range(task_successes)] + 
+                                    [f"energy_data_failure_{i}.json" for i in range(task_episodes - task_successes)]
+                }
+                
+                # Save task energy summary
+                task_energy_file_path = pathlib.Path(args.video_out_path) / f"{task_segment}/{swap_step_dir}_{swap_prompt}/task_energy_summary.json"
+                with open(task_energy_file_path, "w") as f:
+                    json.dump(task_energy_summary, f, indent=4)
+            
             # Log final result
             results[input_prompt] = task_successes / task_episodes
             logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
@@ -674,6 +728,10 @@ def _get_libero_env(task, resolution, seed):
 
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    
+    # Wrap with energy tracking wrapper
+    env = EnergyTrackingWrapper(env)
+    
     return env, task_description
 
 
