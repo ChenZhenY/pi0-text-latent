@@ -19,6 +19,10 @@ from libero.libero.envs import OffScreenRenderEnv
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
 
+""""
+source libero venv before running this script
+"""
+
 # dirty hack, this file can't import openpi under this dir... and Analysis in gemma.py
 class Analysis:
     @staticmethod
@@ -166,12 +170,13 @@ def collect_inference_latents(args: InferenceLatentCollectionArgs) -> None:
         # Get task
         task = task_suite.get_task(task_id)
         task_description = task.language
-        scene_description = "pick up the bbq sauce and place it in the basket" # task_description # TODO: change to allow for more exps
+        scene_description = task_description
+        task_description = "pick up the bbq sauce and place it in the basket" # task_description # TODO: change to allow for more exps
         scene_name = scene_description.replace(" ", "_")
         task_name = task_description.replace(" ", "_")
 
         # TODO: hack for selecting specific tasks and then
-        if "alphabet" not in task_description:
+        if "alphabet" not in scene_description:
             continue
         
         logging.info(f"Collecting data for task {task_id}: {task_description}")

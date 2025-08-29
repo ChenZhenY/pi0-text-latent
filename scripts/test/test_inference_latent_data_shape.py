@@ -25,6 +25,8 @@ def print_dict_structure(d, indent=0):
             #     break
         elif isinstance(value, list):
             print("  " * indent + f"{key}: list with length {len(value)}")
+        elif isinstance(value, str):
+            print("  " * indent + f"{key}: {value}")
         else:
             print("  " * indent + f"{key}: {type(value)}")
 
@@ -46,4 +48,8 @@ if __name__ == "__main__":
     # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0826_visual_latent/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
     pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_bbq_sauce_and_place_it_in_the_basket.pkl"
     pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_bbq_sauce_and_place_it_in_the_basket.pkl"
+    # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_bbq_sauce_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
     test_inference_latent_structure(pkl_path)
+    print(f"done pkl {pkl_path}")
