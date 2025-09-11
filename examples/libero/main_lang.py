@@ -55,14 +55,14 @@ class Args:
     # LIBERO environment-specific parameters
     #################################################################################################################
     # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90,
-    task_suite_name: str = "libero_object_ood"  # libero_spatial_ood, libero_object_ood, libero_goal_ood
+    task_suite_name: str = "libero_object"  # libero_spatial_ood, libero_object_ood, libero_goal_ood
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
-    num_trials_per_task: int = 3  # Number of rollouts per task
+    num_trials_per_task: int = 10  # Number of rollouts per task
 
     #################################################################################################################
     # Utils
     #################################################################################################################
-    video_out_path: str = "data/libero/videos"  # Path to save videos or images
+    video_out_path: str = "data/libero/videos/0830_pi05_libero_object"  # Path to save videos or images
     save_video = True
     draw_traj = False  # Draw trajectory
     render = False
@@ -367,8 +367,8 @@ def eval_libero(args: Args) -> None:
         # Get default LIBERO initial states
         # initial_states = task_suite.get_task_init_states(task_id)
         # TODO: change the task description here
-        # for new_task_description in LIBERO_TASK_DESCRIPTIONS[args.task_suite_name].values():
-        for new_task_description in LIBERO_TASK_DESCRIPTIONS['random'].values():
+        for new_task_description in LIBERO_TASK_DESCRIPTIONS[args.task_suite_name].values(): # default task description
+        # for new_task_description in LIBERO_TASK_DESCRIPTIONS['random'].values(): # random task description
             task_description = new_task_description # input prompt
 
             # Initialize LIBERO environment and task description
@@ -634,7 +634,8 @@ def run_reconstruction_exp():
 def run_extrapolation_exp():
     logging.basicConfig(level=logging.INFO)
     # TODO: run all the evals
-    for task_suite in ["libero_object", "libero_goal", "libero_spatial"]:
+    # for task_suite in ["libero_object", "libero_goal", "libero_spatial"]:
+    for task_suite in ["libero_object"]:
         # TLI
         print(f"*******Running baseline prompt for {task_suite}**********")
         args = Args()

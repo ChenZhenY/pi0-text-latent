@@ -134,18 +134,36 @@ class Libero_Study_Tabletop_Manipulation(BDDLBaseDomain):
         """Very simple implementation at the moment. Will need to upgrade for other relations later."""
         super()._add_placement_initializer()
 
-    def _check_success(self):
+    # def _check_success(self):
+    #     """
+    #     Check if the goal is achieved. Consider conjunction goals at the moment
+    #     """
+    #     goal_state = self.parsed_problem["goal_state"]
+    #     result = True
+    #     for state in goal_state:
+    #         result = self._eval_predicate(state) and result
+    #     #     if not result:
+    #     #         return False
+    #     # return True
+    #     return result
+
+    def _check_success(self, return_success_dict=False):
         """
         Check if the goal is achieved. Consider conjunction goals at the moment
+        If return_success_list is True, return a list of success for each goal state.
         """
         goal_state = self.parsed_problem["goal_state"]
         result = True
+        success_dict = {}
         for state in goal_state:
-            result = self._eval_predicate(state) and result
-        #     if not result:
-        #         return False
-        # return True
-        return result
+            state_str = "_".join(state)
+            success_dict[state_str] = self._eval_predicate(state)
+            result = result and success_dict[state_str]
+        # print(success_list)
+        if return_success_dict:
+            return success_dict
+        else:
+            return result
 
     def _eval_predicate(self, state):
         if len(state) == 3:

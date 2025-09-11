@@ -1,5 +1,6 @@
 # ==========================================================================================
 # Change the prompt during the rollout and check the performance
+# NOTE: to support failure mode analysis, we need to use the different bddl files pi0-text-latent/third_party/modified_libero/libero/libero/bddl_files/libero_object_return_goal_list
 # ==========================================================================================
 
 import collections
@@ -367,8 +368,8 @@ def eval_libero(args: Args) -> None:
         # description_prompt = "pick up the cream cheese and place it in the basket"
 
         task_description_change = description_prompt
-        # rollout_task_swap_step = range(0, 201, 10)
-        rollout_task_swap_step = [0]
+        rollout_task_swap_step = range(0, 201, 10) # TODO: change accordingly
+        # rollout_task_swap_step = [0]
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed) # real task description

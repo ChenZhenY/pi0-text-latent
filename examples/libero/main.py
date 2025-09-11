@@ -50,6 +50,7 @@ class Args:
     video_out_path: str = "data/libero/videos"  # Path to save videos or images
     save_video = True
     draw_traj = False  # Draw trajectory
+    draw_action = False  # Draw action
     render = False
 
     #################################################################################################################
@@ -237,8 +238,8 @@ def add_marker_to_scene(render_context, marker_params):
         g.transparent = 0
         g.reflectance = 0
         g.label = ""
-        g.type = 2  # const.GEOM_SPHERE
-        g.size[:] = np.array([0.008, 0.008, 0.008])
+        g.type = 2 # const.GEOM_SPHERE
+        g.size[:] = np.array([0.008, 0.008, 0.008]) if "size" not in param else param["size"]
         g.mat[:] = np.eye(3)
         g.matid = -1
         g.pos[:] = param["pos"]
@@ -311,9 +312,9 @@ def eval_libero(args: Args) -> None:
 
     if args.draw_traj:
         assert not args.save_video and args.render
-        LIBERO_ENV_RESOLUTION = 1024  # for making demo
+        LIBERO_ENV_RESOLUTION = 512  # for making demo NOTE: 1024 originally
     else:
-        LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
+        LIBERO_ENV_RESOLUTION = 512  # resolution used to render training data
 
     # Set random seed
     np.random.seed(args.seed)
@@ -358,6 +359,10 @@ def eval_libero(args: Args) -> None:
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
         task_scene = task_description
+
+        # # TODO: for simple testing
+        # if task_description != "put the cream cheese on the stove":
+        #     continue
 
         if args.altwording:
             task_segment = task_description.replace(" ", "_")
@@ -485,6 +490,32 @@ def eval_libero(args: Args) -> None:
                                 len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         action_plan.extend(action_chunk[: args.replan_steps])
+
+                        if args.draw_action:
+                            size = np.array([0.004, 0.004, 0.004])  # Smaller spheres for line effect
+                            color = color_list[t] if t < len(color_list) else color_list[-1]
+                            
+                            # Get the raw actions from the policy (normalized to [-1, 1])
+                            raw_actions = action_chunk[:, :3]  # First 3 dimensions (position)
+                            
+                            # Scale the actions according to controller config
+                            input_min = env.controller_configs["input_min"]
+                            input_max = env.controller_configs["input_max"] 
+                            output_min = env.controller_configs["output_min"][:3]  # Position limits
+                            output_max = env.controller_configs["output_max"][:3]
+                            
+                            # Apply scaling
+                            scaled_actions = (np.array(raw_actions) - np.array(input_min)) / (np.array(input_max) - np.array(input_min)) * (np.array(output_max) - np.array(output_min)) + np.array(output_min)
+                            
+                            # Get current end-effector position
+                            current_pos = obs["robot0_eef_pos"]
+                            
+                            # Calculate predicted next positions (current + scaled deltas)
+                            predicted_positions = current_pos + scaled_actions
+
+                            for pred_pos in predicted_positions:
+                                to_draw_data = dict(pos=pred_pos.tolist(), rgba=np.array(color), size=size)
+                                marker_params.append(to_draw_data)
 
                         total_steps += 1
 
@@ -626,7 +657,8 @@ def run_extrapolation_exp():
     logging.basicConfig(level=logging.INFO)
 
     # task_suite_list = ["libero_object", "libero_goal", "libero_spatial"]
-    task_suite_list = ["libero_object"]
+    # task_suite_list = ["libero_object"]
+    task_suite_list = ["libero_goal_ood", "libero_spatial_ood"]
     for task_suite in task_suite_list:
         # TLI
         print(f"*******Running baseline for {task_suite}**********")
@@ -634,7 +666,14 @@ def run_extrapolation_exp():
         args = Args()
         args.task_suite_name = task_suite
         args.layer_to_intervene = None # "all"
-        args.video_out_path = "data/libero/videos/08-14-larger-reset-region"
+        # args.video_out_path = "data/libero/videos/08-14-larger-reset-region"
+        args.video_out_path = "data/libero/videos/0910_pi05_draw_action+traj" # 0910_pi0_cream_cheese_bowl_draw_traj" # 0902_pi05_libero_OOD"
+        
+        args.draw_action = True
+        # args.draw_traj = True
+        args.render = True # if this is true, run program in "ssh +X"
+        args.save_video = False # have to set to false to draw action and trajectory
+        
         args.num_trials_per_task = 10
         args.altwording = False
         eval_libero(args)

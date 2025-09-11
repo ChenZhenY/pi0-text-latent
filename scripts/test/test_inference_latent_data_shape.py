@@ -30,6 +30,26 @@ def print_dict_structure(d, indent=0):
         else:
             print("  " * indent + f"{key}: {type(value)}")
 
+def get_certain_images(pkl_path):
+    """Get certain images from the data."""
+
+    # Load pickle file
+    with open(pkl_path, 'rb') as f:
+        data = pickle.load(f)
+
+    episode_key = "episode_0"
+    episode_data = data["episodes"][episode_key]
+    # breakpoint()
+    for step_key, step_data in episode_data["rollout_steps"].items():
+        if step_key == "step_50":
+            for data_key, data_value in step_data['observation'].items():
+                if data_key == "agentview_image":
+                    import matplotlib.pyplot as plt
+                    plt.imsave("episode_50_agentview_image.png", data_value.astype(np.uint8))
+                    print(f"Saved episode 50 agentview image to episode_50_agentview_image.png")
+                    break
+    return data
+
 def test_inference_latent_structure(pkl_path):
     """Test function to examine inference latent collection data structure."""
     
@@ -49,7 +69,8 @@ if __name__ == "__main__":
     pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_bbq_sauce_and_place_it_in_the_basket.pkl"
     pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
     pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_bbq_sauce_and_place_it_in_the_basket.pkl"
-    # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_bbq_sauce_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
-    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
-    test_inference_latent_structure(pkl_path)
+    pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_bbq_sauce_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    # pkl_path = "/research/data/zhenyang/pi0-text-latent/data/inference_latents/0827_visual_latent_single_scene/task_0_pick_up_the_alphabet_soup_and_place_it_in_the_basket_pick_up_the_alphabet_soup_and_place_it_in_the_basket.pkl"
+    # test_inference_latent_structure(pkl_path)
+    get_certain_images(pkl_path)
     print(f"done pkl {pkl_path}")

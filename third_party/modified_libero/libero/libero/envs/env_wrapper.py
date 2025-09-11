@@ -45,9 +45,12 @@ class ControlEnv:
         ), f"[error] {bddl_file_name} does not exist!"
 
         controller_configs = suite.load_controller_config(default_controller=controller)
+        self.controller_configs = controller_configs.copy() # for access only
 
         problem_info = BDDLUtils.get_problem_info(bddl_file_name)
         # Check if we're using a multi-armed environment and use env_configuration argument if so
+
+        # print(f"controller_configs: {controller_configs}")
 
         # Create environment
         self.problem_name = problem_info["problem_name"]
